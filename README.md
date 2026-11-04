@@ -8,7 +8,7 @@ CENG313 term project. We take part (late submission) in the Kaggle competition
 | Name | Student ID | GitHub |
 |------|-----------|--------|
 | Cemil Emre Bıyık | 24118080048 | [@shroudy-bit32](https://github.com/shroudy-bit32) |
-| Ömer Berkay Pısdıl | 24118080090 | _TBA_ |
+| Ömer Berkay Pısdıl | 24118080090 | [@CiciMuz](https://github.com/CiciMuz) |
 
 ## Competition
 
