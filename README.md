@@ -108,12 +108,19 @@ internet **off**, then *Submit to competition*.
 
 ## Kaggle submission history
 
-| Date | Notebook / model | Public LB | Private LB |
-|------|------------------|-----------|------------|
-| | | | |
+Late submissions (the competition has ended, so they are not ranked on the leaderboard; "≈ rank" is where the score would place on the final private leaderboard).
+
+| Date | Account | Notebook / model | CV acc. | Public LB | Private LB | ≈ Rank |
+|------|---------|------------------|---------|-----------|------------|--------|
+| 2026-11-10 | shroudy-bit32 | `kaggle_submission_baseline.ipynb` – LightGBM + char TF-IDF blend | 0.6271 | – | 0.6224 | ~586 |
 
 ## Progress log
 
 | Date | Work done |
 |------|-----------|
-| 2026-11-04 | Repository created; data downloaded; package skeleton, EDA and baseline models (Assignment 1) |
+| 2026-11-04 | Repository created, data downloaded, project setup and data loading utilities |
+| 2026-11-05 | Team info added |
+| 2026-11-06 | EDA helpers; handcrafted features and baseline models |
+| 2026-11-08 | EDA notebook |
+| 2026-11-09 | Cross-validation utilities; baseline experiments; Kaggle submission notebook |
+| 2026-11-10 | Fixed Kaggle notebook paths; first Kaggle late submission (private LB 0.6224) |
