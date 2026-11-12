@@ -1,18 +1,114 @@
-"""Language-agnostic handcrafted features for a (prompt, response_a, response_b) triple.
+"""Data loading and preprocessing.
 
-The features are deliberately simple and script-independent (character counts,
-markdown structure, overlap with the prompt, ...) because the data is multilingual.
-For each response-level feature ``f`` we produce ``f_a``, ``f_b``, ``f_diff`` (a - b)
-and ``f_ratio`` (a / (a + b)) so that models can learn relative preferences.
+* loading the competition parquet files (locally, on Colab or on Kaggle)
+* target encoding (model_a -> 0, model_b -> 1) and A/B swapping
+* language-agnostic handcrafted features for a (prompt, response_a, response_b) triple
+* hashed character n-gram counts (input of the TF-IDF model)
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
-from typing import Dict, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
+from sklearn.feature_extraction.text import HashingVectorizer
+
+COMPETITION_SLUG = "wsdm-cup-multilingual-chatbot-arena"
+TARGET_CLASSES = ("model_a", "model_b")
+TEXT_COLUMNS = ("prompt", "response_a", "response_b")
+
+# Locations searched (in order) when no explicit data directory is given.
+_CANDIDATE_DIRS: Tuple[str, ...] = (
+    "data",
+    "../data",
+    "overview",
+    "../overview",
+    f"/kaggle/input/{COMPETITION_SLUG}",
+    "/content/data",
+    f"/content/drive/MyDrive/{COMPETITION_SLUG}",
+)
+
+
+def find_data_dir(candidates: Optional[Iterable[str]] = None) -> Path:
+    """Return the first directory that contains ``train.parquet``."""
+    for c in candidates or _CANDIDATE_DIRS:
+        p = Path(c)
+        if (p / "train.parquet").exists():
+            return p
+    raise FileNotFoundError(
+        "train.parquet not found. Put the competition files into ./data "
+        f"(e.g. `kaggle competitions download -c {COMPETITION_SLUG}`) or pass data_dir."
+    )
+
+
+def load_competition_data(
+    data_dir: Optional[str | Path] = None,
+    sample_frac: Optional[float] = None,
+    random_state: int = 42,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Load ``train.parquet`` and ``test.parquet``.
+
+    Parameters
+    ----------
+    data_dir : directory containing the parquet files (auto-detected if None).
+    sample_frac : optionally subsample the training set (useful for quick experiments).
+    """
+    data_dir = Path(data_dir) if data_dir is not None else find_data_dir()
+    train = pd.read_parquet(data_dir / "train.parquet")
+    test = pd.read_parquet(data_dir / "test.parquet")
+    for df in (train, test):
+        for col in TEXT_COLUMNS:
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str)
+    if sample_frac is not None and sample_frac < 1.0:
+        train = train.sample(frac=sample_frac, random_state=random_state).reset_index(drop=True)
+    return train, test
+
+
+def encode_target(winner: pd.Series) -> np.ndarray:
+    """``model_a`` -> 0, ``model_b`` -> 1."""
+    return (winner.astype(str) == "model_b").astype(int).to_numpy()
+
+
+def decode_target(pred: np.ndarray) -> np.ndarray:
+    """0/1 (or probability of model_b) -> class labels."""
+    pred = np.asarray(pred)
+    if pred.dtype.kind == "f":
+        pred = (pred >= 0.5).astype(int)
+    return np.where(pred == 1, TARGET_CLASSES[1], TARGET_CLASSES[0])
+
+
+def train_valid_split(df: pd.DataFrame, test_size: float = 0.2, random_state: int = 42):
+    """Stratified train / validation split (80 / 20 by default)."""
+    from sklearn.model_selection import train_test_split
+
+    return train_test_split(df, test_size=test_size, random_state=random_state, stratify=df["winner"])
+
+
+def swap_ab(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with responses A and B swapped (and the label flipped).
+
+    Used for test-time / train-time augmentation against position bias.
+    """
+    out = df.copy()
+    out["response_a"], out["response_b"] = df["response_b"].values, df["response_a"].values
+    if {"model_a", "model_b"} <= set(df.columns):
+        out["model_a"], out["model_b"] = df["model_b"].values, df["model_a"].values
+    if "winner" in df.columns:
+        out["winner"] = np.where(df["winner"] == "model_a", "model_b", "model_a")
+    return out
+
+
+# ----------------------------------------------------------------------------
+# Handcrafted features
+# ----------------------------------------------------------------------------
+# For each response-level statistic ``f`` we produce ``f_a``, ``f_b``, ``f_diff`` (a - b)
+# and ``f_ratio`` (a / (a + b)) so that models can learn *relative* preferences.
+# The statistics are script-independent because the data covers 100+ languages.
 
 _RE_WORD = re.compile(r"\w+", re.UNICODE)
 _RE_HEADER = re.compile(r"^\s{0,3}#{1,6}\s", re.MULTILINE)
@@ -142,3 +238,35 @@ class HandcraftedFeatureExtractor:
 
     def fit_transform(self, df: pd.DataFrame, y=None) -> pd.DataFrame:
         return self.fit(df, y).transform(df)
+
+
+# ----------------------------------------------------------------------------
+# Character n-grams
+# ----------------------------------------------------------------------------
+
+def hashed_char_counts(
+    texts: pd.Series,
+    ngram_range=(2, 4),
+    n_features: int = 2**20,
+    max_chars: int = 2000,
+    n_jobs: int = -1,
+    chunk: int = 2000,
+) -> sp.csr_matrix:
+    """Character n-gram counts via the hashing trick (stateless -> parallel & cacheable).
+
+    ``char_wb`` n-grams work for every script (Latin, Cyrillic, CJK, ...), which matters
+    because the data covers 100+ languages.
+    """
+    from joblib import Parallel, delayed
+
+    hv = HashingVectorizer(
+        analyzer="char_wb",
+        ngram_range=ngram_range,
+        n_features=n_features,
+        alternate_sign=False,
+        norm=None,
+        dtype=np.float32,
+    )
+    t = texts.str.slice(0, max_chars).tolist()
+    parts = Parallel(n_jobs=n_jobs)(delayed(hv.transform)(t[i : i + chunk]) for i in range(0, len(t), chunk))
+    return sp.vstack(parts).tocsr()

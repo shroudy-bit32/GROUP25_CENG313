@@ -1,4 +1,6 @@
-"""Baseline models. Every model follows a tiny common interface:
+"""Baseline models and their training / evaluation.
+
+Every model follows a tiny common interface:
 
     model.fit(df, y)            # df: DataFrame with prompt/response_a/response_b
     model.predict_proba(df)     # -> P(winner == model_b), shape (n,)
@@ -7,17 +9,20 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import time
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
-from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer
+from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from .features import HandcraftedFeatureExtractor
+from .data import HandcraftedFeatureExtractor, hashed_char_counts
 
 
 class BaseModel:
@@ -132,34 +137,6 @@ class FeatureModelBaseline(BaseModel):
         return pd.Series(imp, index=self.feature_names_).sort_values(ascending=False)
 
 
-def hashed_char_counts(
-    texts: pd.Series,
-    ngram_range=(2, 4),
-    n_features: int = 2**20,
-    max_chars: int = 2000,
-    n_jobs: int = -1,
-    chunk: int = 2000,
-) -> sp.csr_matrix:
-    """Character n-gram counts via the hashing trick (stateless -> parallel & cacheable).
-
-    ``char_wb`` n-grams work for every script (Latin, Cyrillic, CJK, ...), which matters
-    because the data covers 100+ languages.
-    """
-    from joblib import Parallel, delayed
-
-    hv = HashingVectorizer(
-        analyzer="char_wb",
-        ngram_range=ngram_range,
-        n_features=n_features,
-        alternate_sign=False,
-        norm=None,
-        dtype=np.float32,
-    )
-    t = texts.str.slice(0, max_chars).tolist()
-    parts = Parallel(n_jobs=n_jobs)(delayed(hv.transform)(t[i : i + chunk]) for i in range(0, len(t), chunk))
-    return sp.vstack(parts).tocsr()
-
-
 class TfidfDiffBaseline(BaseModel):
     """Character n-gram TF-IDF (language agnostic) + Logistic Regression.
 
@@ -205,3 +182,87 @@ class TfidfDiffBaseline(BaseModel):
 
     def predict_proba(self, df):
         return self.clf_.predict_proba(self._matrix(df))[:, 1]
+
+
+# ----------------------------------------------------------------------------
+# Evaluation
+# ----------------------------------------------------------------------------
+
+def holdout_evaluate(model, train_df: pd.DataFrame, y_train: np.ndarray, valid_df: pd.DataFrame, y_valid: np.ndarray) -> Dict:
+    """Fit on the training part, report accuracy (competition metric) on the validation part."""
+    t0 = time.time()
+    model.fit(train_df, y_train)
+    p = model.predict_proba(valid_df)
+    return {
+        "model": getattr(model, "name", type(model).__name__),
+        "valid_accuracy": float(accuracy_score(y_valid, (p >= 0.5).astype(int))),
+        "proba": p,
+        "fitted": model,
+        "time_s": time.time() - t0,
+    }
+
+
+def cross_validate(
+    model_factory: Callable[[], object],
+    df: pd.DataFrame,
+    y: np.ndarray,
+    n_splits: int = 5,
+    random_state: int = 42,
+    verbose: bool = True,
+) -> Dict:
+    """Stratified K-fold CV. Returns fold scores and out-of-fold probabilities.
+
+    ``model_factory`` must return a *fresh* model each call, e.g. ``lambda: TfidfDiffBaseline()``.
+    """
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    oof = np.zeros(len(df), dtype=np.float64)
+    accs: List[float] = []
+    name = None
+    t0 = time.time()
+    for fold, (tr_idx, va_idx) in enumerate(skf.split(df, y)):
+        model = model_factory()
+        name = getattr(model, "name", type(model).__name__)
+        tr, va = df.iloc[tr_idx], df.iloc[va_idx]
+        model.fit(tr, y[tr_idx])
+        p = model.predict_proba(va)
+        oof[va_idx] = p
+        acc = accuracy_score(y[va_idx], (p >= 0.5).astype(int))
+        accs.append(acc)
+        if verbose:
+            print(f"[{name}] fold {fold + 1}/{n_splits}: acc={acc:.4f}")
+    res = {
+        "model": name,
+        "acc_mean": float(np.mean(accs)),
+        "acc_std": float(np.std(accs)),
+        "fold_acc": accs,
+        "oof": oof,
+        "time_s": time.time() - t0,
+    }
+    pc = np.clip(oof, 1e-6, 1 - 1e-6)
+    res["logloss"] = float(log_loss(y, pc)) if len(np.unique(oof)) > 1 else float("nan")
+    res["auc"] = float(roc_auc_score(y, oof)) if len(np.unique(oof)) > 1 else 0.5
+    if verbose:
+        print(f"[{name}] CV acc = {res['acc_mean']:.4f} ± {res['acc_std']:.4f}  ({res['time_s']:.0f}s)")
+    return res
+
+
+def summarize_results(results: List[Dict]) -> pd.DataFrame:
+    rows = [
+        {
+            "model": r["model"],
+            "cv_accuracy": r["acc_mean"],
+            "cv_std": r["acc_std"],
+            "auc": r["auc"],
+            "logloss": r["logloss"],
+            "time_s": r["time_s"],
+        }
+        for r in results
+    ]
+    return pd.DataFrame(rows).sort_values("cv_accuracy", ascending=False).reset_index(drop=True)
+
+
+def accuracy_by_group(y: np.ndarray, proba: np.ndarray, groups: pd.Series, min_count: int = 200) -> pd.DataFrame:
+    """Accuracy per group (e.g. per language) for error analysis."""
+    d = pd.DataFrame({"y": y, "pred": (proba >= 0.5).astype(int), "g": groups.values})
+    out = d.groupby("g").apply(lambda x: pd.Series({"n": len(x), "accuracy": (x.y == x.pred).mean()}))
+    return out[out.n >= min_count].sort_values("n", ascending=False)

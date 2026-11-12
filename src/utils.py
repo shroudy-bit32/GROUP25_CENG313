@@ -1,12 +1,15 @@
-"""Plotting / summary helpers used by the EDA notebook."""
+"""Helpers: data overview tables, EDA plots and saving submissions."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+from .data import decode_target
 
 COLORS = {"model_a": "#2a78c8", "model_b": "#e0703a"}
 
@@ -20,6 +23,36 @@ def basic_overview(df: pd.DataFrame) -> pd.DataFrame:
             "n_unique": df.nunique(),
         }
     )
+
+
+def duplicate_report(df: pd.DataFrame) -> pd.Series:
+    """Number of duplicated ids / rows / prompts / (prompt, response_a, response_b) triples."""
+    return pd.Series(
+        {
+            "duplicated id": int(df["id"].duplicated().sum()),
+            "fully duplicated rows": int(df.duplicated().sum()),
+            "duplicated (prompt, response_a, response_b)": int(df.duplicated(["prompt", "response_a", "response_b"]).sum()),
+            "duplicated prompt": int(df["prompt"].duplicated().sum()),
+            "response_a == response_b": int((df["response_a"].str.strip() == df["response_b"].str.strip()).sum()),
+        }
+    )
+
+
+def length_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Character lengths of the text columns (used for describe() and outlier analysis)."""
+    return pd.DataFrame({f"len_{c}": df[c].str.len() for c in ("prompt", "response_a", "response_b")})
+
+
+def plot_target_correlations(X: pd.DataFrame, y: np.ndarray, top: int = 20, ax: Optional[plt.Axes] = None):
+    """Pearson correlation of each feature with the target (1 = model_b wins)."""
+    ax = ax or plt.gca()
+    corr = X.apply(lambda c: np.corrcoef(c, y)[0, 1] if c.std() > 0 else 0.0)
+    corr = corr.reindex(corr.abs().sort_values(ascending=False).index).head(top)[::-1]
+    ax.barh(corr.index, corr.values, color=np.where(corr.values > 0, COLORS["model_b"], COLORS["model_a"]))
+    ax.axvline(0, color="gray", lw=0.8)
+    ax.set_title(f"Top-{top} features by |correlation| with target (1 = B wins)")
+    ax.set_xlabel("Pearson r")
+    return corr[::-1]
 
 
 def plot_target_distribution(df: pd.DataFrame, ax: Optional[plt.Axes] = None):
@@ -97,3 +130,10 @@ def feature_win_rate(df: pd.DataFrame, feature_a: pd.Series, feature_b: pd.Serie
         .groupby("cmp")["a_wins"].agg(["mean", "size"])
         .rename(columns={"mean": "P(A wins)", "size": "n"})
     )
+
+
+def make_submission(ids, pred, path: str | Path = "submission.csv") -> pd.DataFrame:
+    """Write ``submission.csv`` in the competition format (id,winner)."""
+    sub = pd.DataFrame({"id": ids, "winner": decode_target(pred)})
+    sub.to_csv(path, index=False)
+    return sub
