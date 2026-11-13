@@ -1,7 +1,9 @@
 # GROUP25_CENG313 — Multilingual Chatbot Arena: Human Preference Prediction
 
-CENG313 term project. We take part (late submission) in the Kaggle competition
-**[WSDM Cup – Multilingual Chatbot Arena](https://www.kaggle.com/competitions/wsdm-cup-multilingual-chatbot-arena)**.
+**Group ID:** 25 · CENG313 Introduction to Data Science
+
+Kaggle competition: **[WSDM Cup – Multilingual Chatbot Arena](https://www.kaggle.com/competitions/wsdm-cup-multilingual-chatbot-arena)**
+(closed competition → evaluated with **late submissions**)
 
 ## Team
 
@@ -10,109 +12,111 @@ CENG313 term project. We take part (late submission) in the Kaggle competition
 | Cemil Emre Bıyık | 24118080048 | [@shroudy-bit32](https://github.com/shroudy-bit32) |
 | Ömer Berkay Pısdıl | 24118080090 | [@CiciMuz](https://github.com/CiciMuz) |
 
+## Current Kaggle score
+
+| Model | Validation acc. (20 % split) | 5-fold CV acc. | Kaggle public | Kaggle private | ≈ rank (private LB) |
+|---|---|---|---|---|---|
+| Blend LightGBM + char TF-IDF (Assignment 1 baseline) | 0.6216 | 0.6271 | – | **0.6224** | ~586 |
+
+Screenshot: [`submissions/kaggle_late_submission.png`](submissions/kaggle_late_submission.png)
+
 ## Competition
 
-Users of [Chatbot Arena](https://lmarena.ai) write a prompt, get answers from two anonymous LLMs
-and vote for the better one. Given `prompt`, `response_a`, `response_b` we must predict the
-`winner` (`model_a` or `model_b`). Conversations are in many languages.
+Users of [Chatbot Arena](https://lmarena.ai) write a prompt, get answers from two anonymous LLMs and vote for the
+better one. Given `prompt`, `response_a`, `response_b` we predict the `winner` (`model_a` or `model_b`).
+Conversations are in 128 languages.
 
-* **Metric:** classification accuracy
-* **Submission:** `submission.csv` with columns `id,winner`
-* It is a *code competition*: the real test set is hidden and is only swapped in when the Kaggle notebook is re-run on submit.
+* **Target:** `winner` (binary) · **Metric:** classification accuracy · **Submission:** `submission.csv` with `id,winner`
+* *Code competition*: the real test set is hidden and only swapped in when the Kaggle notebook is re-run on submit.
 
-## Dataset
+## Data
 
 | File | Description |
 |------|-------------|
-| `train.parquet` | 48,439 battles: `id, prompt, response_a, response_b, winner, model_a, model_b, language` (128 languages, 60 LLMs) |
-| `test.parquet` | Tiny public sample of the hidden test set (same columns, no labels / model names) |
-| `sample_submission.csv` | Submission format |
+| `train.parquet` | 48,439 battles: `id, prompt, response_a, response_b, winner, model_a, model_b, language` |
+| `test.parquet` | public sample (3 rows) of the hidden test set: `id, prompt, response_a, response_b, scored` |
+| `sample_submission.csv` | submission format |
 
-Data files are **not** committed (`train.parquet` is ~114 MB, above GitHub's limit). Download them with
+Data files are **not committed** (Kaggle rules, `train.parquet` is ~114 MB). Download them into `data/`:
 
 ```bash
-kaggle competitions download -c wsdm-cup-multilingual-chatbot-arena
-unzip wsdm-cup-multilingual-chatbot-arena.zip -d data/
+pip install kaggle            # needs ~/.kaggle/kaggle.json (Kaggle → Settings → API → Create New Token)
+kaggle competitions download -c wsdm-cup-multilingual-chatbot-arena -p data
+cd data && unzip wsdm-cup-multilingual-chatbot-arena.zip
 ```
 
-## Repository layout
+## Repository structure
 
 ```
-GROUP25_CENG313/            <- reusable python package used by the notebooks
-    data.py                 loading (local / Colab / Kaggle), target encoding, submission writer
-    features.py             language-agnostic handcrafted features (length, markdown, overlap, ...)
-    models.py               baseline models with a common fit / predict_proba interface
-    evaluation.py           stratified K-fold CV, result tables, per-group accuracy
-    eda.py                  plotting helpers for the EDA
-notebooks/
-    Assignment1_EDA_Baseline.ipynb     Assignment 1 – EDA + baselines (Colab)
-    kaggle_submission_baseline.ipynb   Kaggle inference notebook that produces submission.csv
-requirements.txt
+GROUP25_CENG313/
+├── README.md
+├── requirements.txt
+├── .gitignore                         excludes data/
+├── assignment1_eda_baseline.ipynb     Assignment 1: EDA & baseline (run with outputs)
+├── assignment2_solution.ipynb         Assignment 2: improved solution (to be added)
+├── src/
+│   ├── __init__.py
+│   ├── data.py                        loading, target encoding, train/valid split, handcrafted features, char n-grams
+│   ├── models.py                      baseline models, hold-out evaluation, cross-validation
+│   └── utils.py                       data-overview tables, EDA plots, saving submissions
+├── kaggle/
+│   └── kaggle_submission.ipynb        Kaggle notebook (internet off) that produces submission.csv
+├── data/                              NOT committed
+└── submissions/                       Kaggle score screenshots
 ```
-
-## Approach
-
-### Assignment 1 — EDA and baselines
-
-Key findings (details in the notebook):
-
-* Balanced target (model_b wins 50.5%), 128 languages (English 52%, Russian 13%, Chinese 9%, Vietnamese 6%).
-* **Verbosity bias:** the longer answer wins 58.4% of the battles.
-* **Formatting bias:** more headers / bold / lists / code blocks → higher win rate. Refusals win only 26%.
-* Model names (strong predictors) exist only in train, not in test.
-
-Baselines (all evaluated with 5-fold stratified CV on the training set):
-
-1. **Majority class** – always predict the most frequent label.
-2. **Longer response wins** – rule-based, exploits verbosity bias.
-3. **Handcrafted features + Logistic Regression** – ~90 features per pair (lengths, markdown structure,
-   refusals, prompt overlap …) as A/B values, differences and ratios.
-4. **Handcrafted features + LightGBM** – same features, gradient boosting.
-5. **Char n-gram TF-IDF difference + Logistic Regression** – `tfidf(A) - tfidf(B)` with
-   character n-grams (works for every script), trained with A/B swap augmentation.
-
-### Assignment 2 — proposed solution
-
-_To be added._
-
-## Results
-
-5-fold stratified cross-validation on the training set (accuracy):
-
-| Model | CV accuracy |
-|---|---|
-| Majority class | 0.5054 |
-| Longer response wins (rule) | 0.5837 |
-| Handcrafted features + LogReg | 0.6039 ± 0.0025 |
-| Char TF-IDF diff + LogReg | 0.6046 ± 0.0044 |
-| Handcrafted features + LightGBM | 0.6128 ± 0.0028 |
-| **Blend: LightGBM + TF-IDF** | **0.6271** |
 
 ## How to run
 
-**Google Colab:** open a notebook from `notebooks/` in Colab (File → Open notebook → GitHub). The first cell
-clones this repository, installs the requirements and downloads the data with the Kaggle API
-(upload your `kaggle.json` when asked, or put the parquet files in `MyDrive/wsdm-cup-multilingual-chatbot-arena/`).
-
-**Locally:**
-
 ```bash
 pip install -r requirements.txt
-# put train.parquet / test.parquet into ./data
-jupyter notebook notebooks/Assignment1_EDA_Baseline.ipynb
+# download the data into ./data (see above)
+jupyter notebook assignment1_eda_baseline.ipynb      # run from the repository root
 ```
 
-**Kaggle submission:** create a Kaggle notebook from `notebooks/kaggle_submission_baseline.ipynb`, add the
-competition data, upload the `GROUP25_CENG313/` folder as a Kaggle dataset and attach it, turn
-internet **off**, then *Submit to competition*.
+The notebook imports the reusable code with `from src.data import ...`, `from src.models import ...`.
+Running all cells takes ~10 minutes on a laptop CPU.
+
+**Google Colab:** open the notebook from GitHub; the first cell clones the repository (private repo → use a GitHub token
+in the URL) and installs the requirements. Put the data into `data/` (Kaggle API as above).
+
+**Kaggle submission:** upload the `src/` folder as a Kaggle dataset, import `kaggle/kaggle_submission.ipynb` into a
+Kaggle notebook, add the competition data and the `src` dataset as inputs, turn internet **off**, *Save Version*, then
+*Submit to competition*.
+
+## Approach
+
+### Assignment 1 — EDA & baseline
+
+EDA findings:
+* balanced target (model_b wins 50.5 %), no missing values, practically no duplicates;
+* **verbosity bias**: the longer answer wins 58.4 % of the battles;
+* **formatting bias**: more headers / code blocks / bold text → higher win rate; refusals lose ~77 %;
+* `model_a`, `model_b`, `language` are not available in the test set → not used as features.
+
+Preprocessing: 95 language-agnostic handcrafted features (A, B, A−B, A/(A+B) of length & markdown statistics,
+refusal flags, prompt overlap) and hashed character 2–4-gram TF-IDF (`tfidf(A) − tfidf(B)`, A/B swap augmentation);
+`StandardScaler` for logistic regression; stratified 80/20 split (`random_state=42`).
+
+| Model | Validation acc. | 5-fold CV acc. |
+|---|---|---|
+| Majority class | 0.5054 | 0.5054 |
+| Longer response wins (rule) | 0.5873 | 0.5837 |
+| **Handcrafted + Logistic Regression** (simple baseline) | 0.6114 | 0.6039 |
+| Char TF-IDF diff + Logistic Regression | 0.5931 | 0.6046 |
+| Handcrafted + LightGBM | 0.6182 | 0.6128 |
+| **Blend LightGBM + TF-IDF** | **0.6216** | **0.6271** |
+
+### Assignment 2 — proposed solution
+
+_To be added_ (planned: fine-tuned multilingual transformer + stacking with the handcrafted features).
 
 ## Kaggle submission history
 
-Late submissions (the competition has ended, so they are not ranked on the leaderboard; "≈ rank" is where the score would place on the final private leaderboard).
+Late submissions (not ranked; "≈ rank" is where the score would be placed on the final private leaderboard).
 
-| Date | Account | Notebook / model | CV acc. | Public LB | Private LB | ≈ Rank |
-|------|---------|------------------|---------|-----------|------------|--------|
-| 2026-11-10 | shroudy-bit32 | `kaggle_submission_baseline.ipynb` – LightGBM + char TF-IDF blend | 0.6271 | – | 0.6224 | ~586 |
+| Date | Account | Notebook / model | CV acc. | Public | Private | ≈ Rank |
+|------|---------|------------------|---------|--------|---------|--------|
+| 2026-11-10 | Ömer Berkay Pısdıl | `kaggle/kaggle_submission.ipynb` – LightGBM + char TF-IDF blend | 0.6271 | – | 0.6224 | ~586 |
 
 ## Progress log
 
@@ -123,4 +127,6 @@ Late submissions (the competition has ended, so they are not ranked on the leade
 | 2026-11-06 | EDA helpers; handcrafted features and baseline models |
 | 2026-11-08 | EDA notebook |
 | 2026-11-09 | Cross-validation utilities; baseline experiments; Kaggle submission notebook |
-| 2026-11-10 | Fixed Kaggle notebook paths; first Kaggle late submission (private LB 0.6224) |
+| 2026-11-10 | Fixed Kaggle notebook paths; first Kaggle late submission (private 0.6224) |
+| 2026-11-12 | Moved to the course organization; code reorganized into `src/`; notebook rewritten with the required sections |
+| 2026-11-13 | README, Kaggle screenshot, Assignment 1 tag |
